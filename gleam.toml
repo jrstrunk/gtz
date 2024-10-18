@@ -14,9 +14,9 @@ links = [{ title = "Website", href = "https://gleam.run" }]
 
 [dependencies]
 gleam_stdlib = ">= 0.34.0 and < 2.0.0"
-gtempo = {path="../tempo"}
 tz = ">= 0.28.1 and < 1.0.0"
 timex = ">= 3.7.11 and < 4.0.0"
+gtempo = ">= 5.0.0"
 
 [dev-dependencies]
 gleeunit = ">= 1.0.0 and < 2.0.0"

@@ -9,7 +9,7 @@ packages = [
   { name = "gettext", version = "0.26.1", build_tools = ["mix"], requirements = ["expo"], otp_app = "gettext", source = "hex", outer_checksum = "01CE56F188B9DC28780A52783D6529AD2BC7124F9744E571E1EE4EA88BF08734" },
   { name = "gleam_stdlib", version = "0.40.0", build_tools = ["gleam"], requirements = [], otp_app = "gleam_stdlib", source = "hex", outer_checksum = "86606B75A600BBD05E539EB59FABC6E307EEEA7B1E5865AFB6D980A93BCB2181" },
   { name = "gleeunit", version = "1.2.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gleeunit", source = "hex", outer_checksum = "F7A7228925D3EE7D0813C922E062BFD6D7E9310F0BEE585D3A42F3307E3CFD13" },
-  { name = "gtempo", version = "5.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], source = "local", path = "../tempo" },
+  { name = "gtempo", version = "5.0.0", build_tools = ["gleam"], requirements = ["gleam_stdlib"], otp_app = "gtempo", source = "hex", outer_checksum = "572CA0C26DE00253A3F5D0297B2B0931C03C66592CF0F29E2BFB35D8981AE921" },
   { name = "hackney", version = "1.20.1", build_tools = ["rebar3"], requirements = ["certifi", "idna", "metrics", "mimerl", "parse_trans", "ssl_verify_fun", "unicode_util_compat"], otp_app = "hackney", source = "hex", outer_checksum = "FE9094E5F1A2A2C0A7D10918FEE36BFEC0EC2A979994CFF8CFE8058CD9AF38E3" },
   { name = "hpax", version = "1.0.0", build_tools = ["mix"], requirements = [], otp_app = "hpax", source = "hex", outer_checksum = "7F1314731D711E2CA5FDC7FD361296593FC2542570B3105595BB0BC6D0FAD601" },
   { name = "idna", version = "6.1.1", build_tools = ["rebar3"], requirements = ["unicode_util_compat"], otp_app = "idna", source = "hex", outer_checksum = "92376EB7894412ED19AC475E4A86F7B413C1B9FBB5BD16DCCD57934157944CEA" },
@@ -27,6 +27,6 @@ packages = [
 [requirements]
 gleam_stdlib = { version = ">= 0.34.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }
-gtempo = { path = "../tempo" }
+gtempo = { version = ">= 5.0.0 and < 6.0.0" }
 timex = { version = ">= 3.7.11 and < 4.0.0" }
 tz = { version = ">= 0.28.1 and < 1.0.0" }
