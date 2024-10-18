@@ -1,3 +1,5 @@
+//// Functions to provide simple timezone support for other Gleam datetime libraries.
+
 import tempo
 import tempo/naive_datetime
 import tempo/offset
@@ -59,9 +61,9 @@ fn is_valid_timezone(timezone: String) -> Bool
 /// ## Examples
 /// 
 /// ```gleam
-/// gtz.local()
+/// gtz.local_name()
 /// // -> "Europe/London"
 /// ```
 @external(erlang, "Elixir.Timex.Timezone.Local", "lookup")
 @external(javascript, "./gtz_ffi.mjs", "local_timezone")
-pub fn local() -> String
+pub fn local_name() -> String

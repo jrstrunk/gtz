@@ -28,11 +28,15 @@ export function calculate_offset(year, month, day, hour, minute, second, timezon
   const formatter = new Intl.DateTimeFormat('en-US', options);
   const parts = formatter.formatToParts(utcDate);
 
-  // Construct date strings
-  const targetDateStr = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}T${parts.find(p => p.type === 'hour').value}:${parts.find(p => p.type === 'minute').value}:${parts.find(p => p.type === 'second').value}`;
+  // For some reason the formatter was formatting times with the hour 00 as 24,
+  // so if that is the case we can manually set it to 00.
+  let hourValue = parts.find(p => p.type === 'hour').value
+  hourValue = hourValue == '24' ? '00' : hourValue
+
+  const targetDateStr = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}T${hourValue}:${parts.find(p => p.type === 'minute').value}:${parts.find(p => p.type === 'second').value}`;
   const utcDateStr = utcDate.toISOString().slice(0, 19);
 
-  // Calculate the difference
+  // Calculate the difference in the unix timestamps
   const targetTime = new Date(targetDateStr).getTime();
   const utcTime = new Date(utcDateStr).getTime();
 
