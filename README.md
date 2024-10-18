@@ -1,5 +1,5 @@
 # gtz
-A simple timezone library for Gleam!
+A timezone data provider for Gleam!
 
 [![Package Version](https://img.shields.io/hexpm/v/gtz)](https://hex.pm/packages/gtz)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/gtz/)

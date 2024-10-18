@@ -27,6 +27,6 @@ packages = [
 [requirements]
 gleam_stdlib = { version = ">= 0.34.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }
-gtempo = { version = ">= 5.0.0 and < 6.0.0" }
+gtempo = { version = ">= 5.0.0" }
 timex = { version = ">= 3.7.11 and < 4.0.0" }
 tz = { version = ">= 0.28.1 and < 1.0.0" }
