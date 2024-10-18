@@ -11,7 +11,7 @@ gleam add gtempo@5
 
 This package was written to be used with the [Tempo](https://hexdocs.pm/gtempo/index.html) package, but could be expanded to provide timezone support for other libraries as well! Contributions are welcome! Currently this package is very simple and only supports converting non-naive datetimes to a specific timezone via Tempo; it does not support constructing new datetimes in a specific timezone or assigning a timezone to an existing naive datetime.
 
-Ambiguous datetimes and DST boundries are not handled explicitly by this package, but instead rely on the target timezone package's default handling. It seems like the Elixir package prefers the future time and JavaScript prefers the past time for DST boundries. Once ambiguous datetimes are worked out to be a little more explicit or obvious in this package, there will probably be a v1 release.
+Ambiguous datetimes and DST boundaries are not handled explicitly by this package, but instead rely on the target timezone package's default handling. It seems like the Elixir package prefers the future time and JavaScript prefers the past time for DST boundaries. Once ambiguous datetimes are worked out to be a little more explicit or obvious in this package, there will probably be a v1 release.
 
 Supports both the Erlang and JavaScript targets.
 

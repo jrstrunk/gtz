@@ -41,7 +41,7 @@ pub fn calculate_offset_twice_test() {
   |> should.equal("2024-06-03T06:30:02.334+01:00")
 }
 
-pub fn calculate_offset_day_boundry_test() {
+pub fn calculate_offset_day_boundary_test() {
   let assert Ok(tz) = gtz.timezone("America/New_York")
 
   datetime.literal("2024-01-03T00:05:02.334Z")
