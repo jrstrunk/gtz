@@ -1,0 +1,44 @@
+export function is_valid_timezone(timeZone) {
+  try {
+    Intl.DateTimeFormat(undefined, {timeZone: timeZone});
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+export function calculate_offset(year, month, day, hour, minute, second, timezone) {
+  // Create Date objects for UTC and the target timezone
+  // const utcDate = new Date(unix_timestamp * 1000);
+  const utcDate = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
+  
+  // Format options for getting the time components
+  const options = {
+    timeZone: timezone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit'
+  };
+
+  // Format the date in the target timezone
+  const formatter = new Intl.DateTimeFormat('en-US', options);
+  const parts = formatter.formatToParts(utcDate);
+
+  // Construct date strings
+  const targetDateStr = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}T${parts.find(p => p.type === 'hour').value}:${parts.find(p => p.type === 'minute').value}:${parts.find(p => p.type === 'second').value}`;
+  const utcDateStr = utcDate.toISOString().slice(0, 19);
+
+  // Calculate the difference
+  const targetTime = new Date(targetDateStr).getTime();
+  const utcTime = new Date(utcDateStr).getTime();
+
+  return Math.trunc((targetTime - utcTime) / 60000);
+}
+
+export function local_timezone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
