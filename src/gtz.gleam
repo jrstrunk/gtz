@@ -1,6 +1,7 @@
 //// Functions to provide simple timezone support for other Gleam datetime libraries.
 
 import tempo
+import tempo/duration
 import tempo/naive_datetime
 import tempo/offset
 
@@ -30,7 +31,8 @@ pub fn timezone(name: String) -> Result(tempo.TimeZoneProvider, Nil) {
 
             let assert Ok(offset) =
               calculate_offset(year, month, day, hour, minute, second, name)
-              |> offset.new
+              |> duration.minutes
+              |> offset.from_duration
 
             offset
           },
