@@ -1,4 +1,6 @@
 import gleam/option
+import gleam/time/calendar
+import gleam/time/timestamp
 import gleeunit
 import gleeunit/should
 import gtz
@@ -153,4 +155,44 @@ pub fn get_tempo_tz_name_test() {
   |> datetime.to_timezone(tz)
   |> datetime.get_timezone_name
   |> should.equal(option.Some("Europe/London"))
+}
+
+pub fn calculate_timestamp_offset_test() {
+  let assert Ok(offset) =
+    datetime.literal("2024-01-03T05:30:02.334Z")
+    |> datetime.to_timestamp
+    |> gtz.calculate_offset(in: "America/New_York")
+
+  assert offset == duration.minutes(-300)
+}
+
+pub fn calculate_timestamp_offset_day_boundary_test() {
+  let assert Ok(offset) =
+    datetime.literal("2024-01-03T00:05:02.334Z")
+    |> datetime.to_timestamp
+    |> gtz.calculate_offset(in: "America/New_York")
+
+  assert offset == duration.minutes(-300)
+}
+
+pub fn calculate_timestamp_offset_dst_test() {
+  let assert Ok(offset) =
+    datetime.literal("2024-07-08T10:30:02.334Z")
+    |> datetime.to_timestamp
+    |> gtz.calculate_offset(in: "America/New_York")
+
+  assert offset == duration.minutes(-240)
+}
+
+pub fn unix_to_timestamp_tz_test() {
+  let ts = timestamp.from_unix_seconds(1_729_257_776)
+  let assert Ok(offset) = gtz.calculate_offset(ts, in: "America/New_York")
+
+  assert offset == duration.minutes(-240)
+
+  assert timestamp.to_calendar(ts, offset)
+    == #(
+      calendar.Date(2024, calendar.October, 18),
+      calendar.TimeOfDay(9, 22, 56, 0),
+    )
 }

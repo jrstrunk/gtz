@@ -1,19 +1,22 @@
 //// Functions to provide simple timezone support for other Gleam datetime libraries.
 
+import gleam/time/calendar
+import gleam/time/duration
+import gleam/time/timestamp
 import tempo
-import tempo/duration
 import tempo/naive_datetime
 import tempo/offset
 
-/// Constructs a TimeZoneProvider type to be used with the Tempo package. 
+/// Constructs a TimeZoneProvider type to be used with the Tempo package.
 /// Returns an error if the timezone is not valid.
-/// 
+///
 /// ## Examples
-/// 
+///
 /// ```gleam
 /// import tempo/datetime
 ///
 /// let assert Ok(tz) = gtz.timezone("America/New_York")
+///
 /// datetime.literal("2024-06-21T06:30:02.334Z")
 /// |> datetime.to_timezone(tz)
 /// |> datetime.to_string
@@ -30,7 +33,7 @@ pub fn timezone(name: String) -> Result(tempo.TimeZoneProvider, Nil) {
               naive_datetime.to_tuple(utc_naive_datetime)
 
             let assert Ok(offset) =
-              calculate_offset(year, month, day, hour, minute, second, name)
+              calculate_offset_ffi(year, month, day, hour, minute, second, name)
               |> duration.minutes
               |> offset.from_duration
 
@@ -42,9 +45,61 @@ pub fn timezone(name: String) -> Result(tempo.TimeZoneProvider, Nil) {
   }
 }
 
+/// Calculates the offset of a given timestamp in a specific time zone. Returns
+/// an error if the time zone is invalid.
+///
+/// This can be combined with the `gleam_time` package to convert timestamps to
+/// calendar dates in a given time zone.
+///
+/// ## Example
+///
+/// ```gleam
+/// import gtz
+/// import gleam/time/timestamp
+///
+/// let my_ts =
+///   1_729_257_776
+///   |> timestamp.from_unix_seconds
+///
+/// let assert Ok(offset) =
+///   gtz.calculate_offset(my_ts, in: "America/New_York")
+///
+/// timestamp.to_calendar(my_ts, offset)
+/// // -> #(
+/// //   calendar.Date(2024, calendar.October, 18),
+/// //   calendar.TimeOfDay(9, 22, 56, 0)
+/// // )
+/// ```
+pub fn calculate_offset(
+  timestamp: timestamp.Timestamp,
+  in time_zone: String,
+) -> Result(duration.Duration, Nil) {
+  case is_valid_timezone(time_zone) {
+    True -> {
+      let #(
+        calendar.Date(year:, month:, day:),
+        calendar.TimeOfDay(hours:, minutes:, seconds:, nanoseconds: _),
+      ) = timestamp.to_calendar(timestamp, calendar.utc_offset)
+
+      calculate_offset_ffi(
+        year,
+        month |> calendar.month_to_int,
+        day,
+        hours,
+        minutes,
+        seconds,
+        time_zone,
+      )
+      |> duration.minutes
+      |> Ok
+    }
+    False -> Error(Nil)
+  }
+}
+
 @external(erlang, "Elixir.GTZ_FFI", "calculate_offset")
 @external(javascript, "./gtz_ffi.mjs", "calculate_offset")
-fn calculate_offset(
+fn calculate_offset_ffi(
   year: Int,
   month: Int,
   day: Int,
@@ -59,9 +114,9 @@ fn calculate_offset(
 fn is_valid_timezone(timezone: String) -> Bool
 
 /// Returns the name of the host system's timezone.
-/// 
+///
 /// ## Examples
-/// 
+///
 /// ```gleam
 /// gtz.local_name()
 /// // -> "Europe/London"
