@@ -6,14 +6,35 @@ A timezone data provider for Gleam!
 
 ```sh
 gleam add gtz
-gleam add gtempo@5
+# Choose which package to use for other time functionality
+gleam add gtempo
+gleam add gleam_time
 ```
 
-This package was written to be used with the [Tempo](https://hexdocs.pm/gtempo/index.html) package, but could be expanded to provide timezone support for other libraries as well! Contributions are welcome! Currently this package is very simple and only supports converting non-naive datetimes to a specific timezone via Tempo; it does not support constructing new datetimes in a specific timezone or assigning a timezone to an existing naive datetime.
+This package has functions to be used with the [gtempo](https://hexdocs.pm/gtempo/index.html) package and the [gleam_time](https://hexdocs.pm/gleam_time/index.html) package. Currently this package is very simple: it only supports converting non-naive datetimes to a specific timezone via `gtempo`, and calculating an offset given a timestamp and time zone via the `gleam_time` types. Contributions are welcome!
 
 Ambiguous datetimes and DST boundaries are not handled explicitly by this package, but instead rely on the target timezone package's default handling. It seems like the Elixir package prefers the future time and JavaScript prefers the past time for DST boundaries. Once ambiguous datetimes are worked out to be a little more explicit or obvious in this package, there will probably be a v1 release.
 
 Supports both the Erlang (via a dependency on the Elixir `tz` and `timex` libraries) and JavaScript (via the native `Intl` API) targets.
+
+#### Calculating Offsets In a Time Zone
+```gleam
+import gleam/time/timestamp
+import gtz
+
+let my_ts = timestamp.from_unix_seconds(1_729_257_776)
+
+let assert Ok(ny_offset) = 
+  gtz.calculate_offset(my_ts, in: "America/New_York")
+
+// Now that we have the offset for the timestamp in the desired time zone, we 
+// can convert it to a calendar date and time
+timestamp.to_calendar(my_ts, ny_offset)
+// -> #(
+//   calendar.Date(2024, calendar.October, 18),
+//   calendar.TimeOfDay(9, 22, 56, 0)
+// )
+```
 
 #### Converting DateTimes to the Local Timezone
 ```gleam
