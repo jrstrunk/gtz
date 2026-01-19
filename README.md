@@ -13,7 +13,7 @@ This package was written to be used with the [Tempo](https://hexdocs.pm/gtempo/i
 
 Ambiguous datetimes and DST boundaries are not handled explicitly by this package, but instead rely on the target timezone package's default handling. It seems like the Elixir package prefers the future time and JavaScript prefers the past time for DST boundaries. Once ambiguous datetimes are worked out to be a little more explicit or obvious in this package, there will probably be a v1 release.
 
-Supports both the Erlang and JavaScript targets.
+Supports both the Erlang (via a dependency on the Elixir `tz` and `timex` libraries) and JavaScript (via the native `Intl` API) targets.
 
 #### Converting DateTimes to the Local Timezone
 ```gleam
