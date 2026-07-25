@@ -13,9 +13,7 @@ gleam add gleam_time
 
 This package has functions to be used with the [gtempo](https://hexdocs.pm/gtempo/index.html) package and the [gleam_time](https://hexdocs.pm/gleam_time/index.html) package. Currently this package is very simple: it only supports converting non-naive datetimes to a specific timezone via `gtempo`, and calculating an offset given a timestamp and time zone via the `gleam_time` types. Contributions are welcome!
 
-Ambiguous datetimes and DST boundaries are not handled explicitly by this package, but instead rely on the target timezone package's default handling. It seems like the Elixir package prefers the future time and JavaScript prefers the past time for DST boundaries. Once ambiguous datetimes are worked out to be a little more explicit or obvious in this package, there will probably be a v1 release.
-
-Supports both the Erlang (via a dependency on the Elixir `tz` and `timex` libraries) and JavaScript (via the native `Intl` API) targets.
+Supports both the Erlang and JavaScript targets. On Erlang the timezone data comes from the operating system's TZif files (typically `/usr/share/zoneinfo`) via the `tzif` package, loaded once and cached in a persistent term; on JavaScript it comes from the native `Intl` API.
 
 #### Calculating Offsets In a Time Zone
 ```gleam
