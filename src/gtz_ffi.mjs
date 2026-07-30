@@ -13,7 +13,7 @@ export function calculate_offset(year, month, day, hour, minute, second, timezon
   // Create Date objects for UTC and the target timezone
   // const utcDate = new Date(unix_timestamp * 1000);
   const utcDate = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-  
+
   // Format options for getting the time components
   const options = {
     timeZone: timezone,
