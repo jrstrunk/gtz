@@ -1,207 +1,151 @@
-//// Functions to provide simple timezone support for other Gleam datetime libraries.
+//// Simple, cross target time zone support for `gleam_time`.
+////
+//// The whole API is one type and three functions: build a `TimeZone` from an
+//// IANA zone name, then convert timestamps to and from calendar dates with it.
+////
+//// ```gleam
+//// import gleam/time/timestamp
+//// import gtz
+////
+//// let assert Ok(zone) = gtz.build("America/New_York")
+////
+//// timestamp.from_unix_seconds(1_729_257_776)
+//// |> gtz.to_calendar(zone)
+//// // -> #(
+//// //   calendar.Date(2024, calendar.October, 18),
+//// //   calendar.TimeOfDay(9, 22, 56, 0),
+//// //   duration.seconds(-14_400),
+//// // )
+//// ```
+////
+//// The conversions themselves are `tzif`'s; what this package adds is getting
+//// a usable database in place on both targets without the caller thinking
+//// about it. See `build` for where the data comes from.
 
 import gleam/list
 import gleam/result
 import gleam/time/calendar
 import gleam/time/duration
 import gleam/time/timestamp
-import tempo
-import tempo/naive_datetime
-import tempo/offset
 import tzif/database.{type TzDatabase}
 import tzif/parser
+import tzif/tzcalendar
 
-/// Constructs a TimeZoneProvider type to be used with the Tempo package.
-/// Returns an error if the timezone is not valid.
+/// An IANA time zone, paired with the time zone data needed to interpret it.
+///
+/// Build one with `build`, then hand it to `to_calendar` or `from_calendar`.
+pub opaque type TimeZone {
+  TimeZone(name: String, database: TzDatabase)
+}
+
+/// Build a `TimeZone` from an IANA zone name such as `"America/New_York"`.
+/// Returns an error if the name is not a zone this host has usable data for.
+///
+/// Where the underlying data comes from depends on the target:
+///
+/// - On **Erlang**, the operating system's TZif database (usually
+///   `/usr/share/zoneinfo`) is read once and memoized. If the host has no
+///   zoneinfo tree, the prebuilt `zones` database is used instead, so this
+///   works on a bare container image too.
+/// - On **JavaScript**, where there is no filesystem to read TZif files from,
+///   a lean database covering just this one zone is synthesized from the
+///   host's native `Temporal` and `Intl` APIs.
 ///
 /// ## Examples
 ///
 /// ```gleam
-/// import tempo/datetime
+/// gtz.build("America/New_York")
+/// // -> Ok(TimeZone(..))
 ///
-/// let assert Ok(tz) = gtz.timezone("America/New_York")
-///
-/// datetime.literal("2024-06-21T06:30:02.334Z")
-/// |> datetime.to_timezone(tz)
-/// |> datetime.to_string
-/// // -> "2024-01-03T02:30:02.334-04:00"
+/// gtz.build("America/NewYork")
+/// // -> Error(Nil)
 /// ```
-pub fn timezone(name: String) -> Result(tempo.TimeZoneProvider, Nil) {
-  case is_valid_timezone(name) {
-    True ->
-      Ok(
-        tempo.TimeZoneProvider(
-          get_name: fn() { name },
-          calculate_offset: fn(utc_naive_datetime) {
-            let #(#(year, month, day), #(hour, minute, second)) =
-              naive_datetime.to_tuple(utc_naive_datetime)
+pub fn build(name: String) -> Result(TimeZone, Nil) {
+  use db <- result.try(database_for(name))
 
-            let assert Ok(offset) =
-              calculate_offset_ffi(year, month, day, hour, minute, second, name)
-              |> duration.minutes
-              |> offset.from_duration
+  // Resolving the zone once here is what makes `to_calendar` total. `tzif`
+  // fails a lookup when the name is absent, or when the zone's file carries no
+  // offset records at all; neither depends on which timestamp was asked for,
+  // so a zone that resolves at the epoch resolves at every other instant too.
+  // Nothing can invalidate that afterwards, as `TimeZone` is opaque and the
+  // database it holds is immutable.
+  use _ <- result.map(
+    database.get_zone_parameters(timestamp.from_unix_seconds(0), name, db)
+    |> result.replace_error(Nil),
+  )
 
-            offset
-          },
-        ),
-      )
-    False -> Error(Nil)
-  }
+  TimeZone(name:, database: db)
 }
 
-/// Calculates the offset of a given timestamp in a specific time zone. Returns
-/// an error if the time zone is invalid.
+/// Convert a timestamp to the date, time of day, and UTC offset that a wall
+/// clock in `zone` would show for it.
 ///
-/// This can be combined with the `gleam_time` package to convert timestamps to
-/// calendar dates in a given time zone.
-///
-/// ## Example
+/// ## Examples
 ///
 /// ```gleam
-/// import gtz
-/// import gleam/time/timestamp
+/// let assert Ok(zone) = gtz.build("America/New_York")
 ///
-/// let my_ts =
-///   1_729_257_776
-///   |> timestamp.from_unix_seconds
-///
-/// let assert Ok(offset) =
-///   gtz.calculate_offset(my_ts, in: "America/New_York")
-///
-/// timestamp.to_calendar(my_ts, offset)
+/// timestamp.from_unix_seconds(1_729_257_776)
+/// |> gtz.to_calendar(zone)
 /// // -> #(
 /// //   calendar.Date(2024, calendar.October, 18),
-/// //   calendar.TimeOfDay(9, 22, 56, 0)
+/// //   calendar.TimeOfDay(9, 22, 56, 0),
+/// //   duration.seconds(-14_400),
 /// // )
 /// ```
-pub fn calculate_offset(
+pub fn to_calendar(
   timestamp: timestamp.Timestamp,
-  in time_zone: String,
-) -> Result(duration.Duration, Nil) {
-  case is_valid_timezone(time_zone) {
-    True -> {
-      let #(
-        calendar.Date(year:, month:, day:),
-        calendar.TimeOfDay(hours:, minutes:, seconds:, nanoseconds: _),
-      ) = timestamp.to_calendar(timestamp, calendar.utc_offset)
+  zone: TimeZone,
+) -> #(calendar.Date, calendar.TimeOfDay, duration.Duration) {
+  let assert Ok(found) =
+    tzcalendar.to_time_and_zone(timestamp, zone.name, zone.database)
+    as "a TimeZone can only exist for a zone that resolves at every instant"
 
-      calculate_offset_ffi(
-        year,
-        month |> calendar.month_to_int,
-        day,
-        hours,
-        minutes,
-        seconds,
-        time_zone,
-      )
-      |> duration.minutes
-      |> Ok
-    }
-    False -> Error(Nil)
-  }
+  #(found.date, found.time_of_day, found.offset)
 }
 
-/// The offset from UTC, in minutes, that `timezone` was at the given UTC
-/// wall-clock time. On JavaScript this is answered by the host's `Intl` API; on
-/// Erlang it comes from the operating system's TZif database via `tzif`.
+/// Convert a date and time of day in `zone` back to a timestamp.
 ///
-/// An unknown zone yields 0, which callers never observe because every entry
-/// point checks `is_valid_timezone` first.
-fn calculate_offset_ffi(
-  year: Int,
-  month: Int,
-  day: Int,
-  hour: Int,
-  minute: Int,
-  second: Int,
-  timezone: String,
-) -> Int {
-  case is_javascript() {
-    True ->
-      calculate_offset_js(year, month, day, hour, minute, second, timezone)
-    False ->
-      case
-        os_zone_parameters(year, month, day, hour, minute, second, timezone)
-      {
-        Ok(params) -> {
-          let #(seconds, _nanoseconds) =
-            duration.to_seconds_and_nanoseconds(params.offset)
-          seconds / 60
-        }
-        Error(_) -> 0
-      }
-  }
+/// Daylight saving time makes this direction partial. When the wall clock time
+/// is ambiguous, because the clocks went back and it happened twice, the first
+/// occurrence is returned. When it never existed at all, because the clocks
+/// went forward over it, `Error(Nil)` is returned.
+///
+/// ## Examples
+///
+/// ```gleam
+/// let assert Ok(zone) = gtz.build("America/New_York")
+///
+/// gtz.from_calendar(
+///   calendar.Date(2025, calendar.November, 2),
+///   calendar.TimeOfDay(1, 30, 0, 0),
+///   zone,
+/// )
+/// // -> Ok(Timestamp(1_762_061_400, 0)), the earlier of the two 01:30s
+///
+/// gtz.from_calendar(
+///   calendar.Date(2025, calendar.March, 9),
+///   calendar.TimeOfDay(2, 30, 0, 0),
+///   zone,
+/// )
+/// // -> Error(Nil), that clock time was skipped
+/// ```
+pub fn from_calendar(
+  date: calendar.Date,
+  time: calendar.TimeOfDay,
+  zone: TimeZone,
+) -> Result(timestamp.Timestamp, Nil) {
+  let assert Ok(candidates) =
+    tzcalendar.from_calendar(date, time, zone.name, zone.database)
+    as "a TimeZone can only exist for a zone that resolves at every instant"
+
+  // `tzif` returns both sides of an ambiguous wall clock time, and nothing at
+  // all for one the clocks skipped over. The earlier timestamp is the first
+  // occurrence.
+  candidates |> list.sort(timestamp.compare) |> list.first
 }
 
-fn os_zone_parameters(
-  year: Int,
-  month: Int,
-  day: Int,
-  hour: Int,
-  minute: Int,
-  second: Int,
-  timezone: String,
-) -> Result(database.ZoneParameters, Nil) {
-  use db <- result.try(os_database())
-  use month <- result.try(calendar.month_from_int(month))
-
-  let timestamp =
-    timestamp.from_calendar(
-      calendar.Date(year:, month:, day:),
-      calendar.TimeOfDay(
-        hours: hour,
-        minutes: minute,
-        seconds: second,
-        nanoseconds: 0,
-      ),
-      calendar.utc_offset,
-    )
-
-  database.get_zone_parameters(timestamp, timezone, db)
-  |> result.replace_error(Nil)
-}
-
-fn is_valid_timezone(timezone: String) -> Bool {
-  case is_javascript() {
-    True -> is_valid_timezone_js(timezone)
-    False ->
-      case os_database() {
-        Ok(db) ->
-          database.get_available_timezones(db) |> list.contains(timezone)
-        Error(_) -> False
-      }
-  }
-}
-
-// External on JavaScript; the Gleam bodies below are the Erlang fallbacks and
-// are never reached there because the callers above branch on `is_javascript`.
-@external(javascript, "./gtz_ffi.mjs", "calculate_offset")
-fn calculate_offset_js(
-  _year: Int,
-  _month: Int,
-  _day: Int,
-  _hour: Int,
-  _minute: Int,
-  _second: Int,
-  _timezone: String,
-) -> Int {
-  0
-}
-
-@external(javascript, "./gtz_ffi.mjs", "is_valid_timezone")
-fn is_valid_timezone_js(_timezone: String) -> Bool {
-  False
-}
-
-// The host's TZif database, loaded once and memoized. External on Erlang; the
-// Gleam body is the JavaScript fallback, where there is no filesystem to read
-// TZif files from.
-@external(erlang, "gtz_ffi", "os_database")
-fn os_database() -> Result(TzDatabase, Nil) {
-  Error(Nil)
-}
-
-/// Returns the name of the host system's timezone.
+/// Returns the name of the host system's time zone.
 ///
 /// ## Examples
 ///
@@ -218,116 +162,96 @@ fn os_database() -> Result(TzDatabase, Nil) {
 @external(javascript, "./gtz_ffi.mjs", "local_timezone")
 pub fn local_name() -> String
 
-/// Obtain a `tzif` `TzDatabase` covering the given IANA zone names.
+/// The database to answer queries about `name` from.
 ///
-/// This provides the richer `tzif/database` and `tzif/tzcalendar` API (offset,
-/// designation, is-DST, ambiguous/skipped wall-clock times, ...) rather than
-/// just an offset, and works on both targets:
-///
-/// - On **Erlang** the full IANA database is loaded from the operating
-///   system's TZif files via `tzif`'s `database.load_from_os`, so `zone_names`
-///   is ignored and every installed zone is available. This includes leap
-///   second data where the OS provides it.
-/// - On **JavaScript**, where there is no filesystem to read TZif files from, a
-///   lean database is synthesized on the fly from the host's native time zone
-///   engine (the `Temporal` API plus `Intl`) containing exactly the requested
-///   zones. Offsets are exact, `is_dst` is inferred heuristically (any offset
-///   larger than the zone's minimum is treated as DST), `designation` comes
-///   from `Intl`, and leap seconds are ignored (`Temporal` does not model
-///   them). Unknown or unbuildable zones are silently skipped.
-///
-/// Returns `Error(Nil)` on Erlang if no OS database could be read, and on
-/// JavaScript if none of the requested zones could be built (for example when
-/// `Temporal` is unavailable).
-///
-/// ## Example
-///
-/// ```gleam
-/// import gleam/time/timestamp
-/// import gtz
-/// import tzif/tzcalendar
-///
-/// let assert Ok(db) = gtz.load(["America/New_York"])
-/// let ts = timestamp.from_unix_seconds(1_758_223_300)
-/// tzcalendar.to_time_and_zone(ts, "America/New_York", db)
-/// // -> Ok(TimeAndZone(Date(2025, September, 18), TimeOfDay(15, 21, 40, 0),
-/// //      Duration(-14_400, 0), "EDT", True))
-/// ```
-fn load(zone_names: List(String)) -> Result(TzDatabase, Nil) {
-  case is_javascript() {
-    True -> load_from_platform(zone_names)
-    False -> os_database()
+/// Only one of the two branches is ever live on a given target, because each
+/// FFI below is a no-op on the other one. JavaScript has no filesystem to read
+/// a whole TZif tree from, so it derives just the requested zone from the
+/// host's own time zone engine; Erlang has no `Temporal`, so it reads the tree.
+fn database_for(name: String) -> Result(TzDatabase, Nil) {
+  case platform_zone_data(name) {
+    Ok(rows) ->
+      Ok(database.add_tzfile(database.new(), name, build_tzfile(rows)))
+    Error(_) -> host_database()
   }
 }
 
-/// Convenience wrapper for loading a single zone. See `load`.
-fn load_zone(zone_name: String) -> Result(TzDatabase, Nil) {
-  load([zone_name])
+/// The host's own TZif database, loaded once and memoized.
+///
+/// The Erlang FFI prefers the operating system's zoneinfo tree and falls back
+/// to the prebuilt `zones` database. That fallback lives in the FFI rather
+/// than here so the several megabytes of `zones` are never referenced from
+/// Gleam, and so cannot be pulled into a JavaScript bundle.
+///
+/// The body is the JavaScript implementation, where there is no filesystem to
+/// read TZif files from.
+@external(erlang, "gtz_ffi", "host_database")
+fn host_database() -> Result(TzDatabase, Nil) {
+  Error(Nil)
 }
 
-fn load_from_platform(zone_names: List(String)) -> Result(TzDatabase, Nil) {
-  let db =
-    list.fold(zone_names, database.new(), fn(db, name) {
-      case platform_zone_data(name) {
-        Ok(rows) -> database.add_tzfile(db, name, build_tzfile(rows))
-        Error(_) -> db
-      }
-    })
-
-  // Signal failure if nothing at all could be built.
-  case database.get_available_timezones(db) {
-    [] -> Error(Nil)
-    _ -> Ok(db)
-  }
+/// Raw native transition facts for one IANA zone, from the host's `Temporal`
+/// or `Intl` APIs. The body is the Erlang implementation, which has neither.
+@external(javascript, "./gtz_ffi.mjs", "zone_transitions")
+fn platform_zone_data(_zone_name: String) -> Result(List(Row), Nil) {
+  Error(Nil)
 }
 
-// Each row is #(transition_start_unix_seconds, utc_offset_seconds, designation)
-// as reported by the host platform for one offset transition.
+/// Each row is
+/// `#(transition_start_unix_seconds, utc_offset_seconds, designation)`
+/// as reported by the host platform for one offset transition.
 type Row =
   #(Int, Int, String)
 
+/// Assemble platform transition rows into the TZif shape `tzif` queries.
+///
+/// `rows` is never empty: both platform implementations emit a baseline row
+/// for the start of their window before any transitions. That matters, because
+/// a zone with no offset records at all is exactly the one case `tzif` cannot
+/// resolve, and `build` rejects it.
 fn build_tzfile(rows: List(Row)) -> parser.TzFile {
   // Heuristic: standard time is the smallest offset observed for the zone; any
   // larger offset is treated as daylight saving time. This holds for the usual
   // "standard / standard + 1h" arrangement.
   let standard =
     rows
-    |> list.map(fn(r) { r.1 })
+    |> list.map(fn(row) { row.1 })
     |> list.reduce(int_min)
-    |> unwrap_or(0)
+    |> result.unwrap(0)
 
   let ttinfos =
-    list.map(rows, fn(r) {
-      let isdst = case r.1 > standard {
+    list.map(rows, fn(row) {
+      let isdst = case row.1 > standard {
         True -> 1
         False -> 0
       }
       // desigidx is unused by the query path because designations are supplied
       // as a parallel list here, so 0 is fine.
-      parser.TtInfo(utoff: r.1, isdst: isdst, desigidx: 0)
+      parser.TtInfo(utoff: row.1, isdst:, desigidx: 0)
     })
 
   let fields =
     parser.TzFileFields(
-      transition_times: list.map(rows, fn(r) { r.0 }),
+      transition_times: list.map(rows, fn(row) { row.0 }),
       // time_types[i] = i, indexing 1:1 into ttinfos / designations.
       time_types: list.index_map(rows, fn(_, i) { i }),
       ttinfos:,
-      designations: list.map(rows, fn(r) { r.2 }),
+      designations: list.map(rows, fn(row) { row.2 }),
       leapsecond_values: [],
       standard_or_wall: [],
       ut_or_local: [],
     )
 
-  let n = list.length(rows)
+  let count = list.length(rows)
+
   parser.TzFile(
     header: parser.TzFileHeader(
       version: 2,
       ttisutcnt: 0,
       ttisstdcnt: 0,
       leapcnt: 0,
-      timecnt: n,
-      typecnt: n,
+      timecnt: count,
+      typecnt: count,
       charcnt: 0,
     ),
     fields:,
@@ -340,26 +264,4 @@ fn int_min(a: Int, b: Int) -> Int {
     True -> a
     False -> b
   }
-}
-
-fn unwrap_or(r: Result(a, e), default: a) -> a {
-  case r {
-    Ok(v) -> v
-    Error(_) -> default
-  }
-}
-
-// True on the JavaScript target (via FFI); the Gleam body below is the Erlang
-// fallback and always returns False.
-@external(javascript, "./gtz_ffi.mjs", "is_javascript")
-fn is_javascript() -> Bool {
-  False
-}
-
-// Raw native transition facts for one IANA zone. External on JavaScript; the
-// Gleam body is the Erlang fallback and is never reached on that target because
-// `load` branches to `load_from_os` there.
-@external(javascript, "./gtz_ffi.mjs", "zone_transitions")
-fn platform_zone_data(_zone_name: String) -> Result(List(Row), Nil) {
-  Error(Nil)
 }

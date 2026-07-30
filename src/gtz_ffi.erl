@@ -1,21 +1,31 @@
 %% Erlang target support for gtz, with no Elixir dependency.
 -module(gtz_ffi).
 
--export([local_timezone/0, os_database/0]).
+-export([local_timezone/0, host_database/0]).
 
--define(DATABASE_KEY, {gtz_ffi, os_database}).
+-define(DATABASE_KEY, {gtz_ffi, host_database}).
 
-%% Loads the operating system's TZif database via `tzif`, memoized in
-%% persistent_term. Parsing /usr/share/zoneinfo means reading several hundred
-%% files, so it must not happen once per offset lookup. Returns the Gleam
-%% `Result(TzDatabase, Nil)` that `tzif@database:load_from_os/0` produces,
-%% caching failures too so a machine without a zoneinfo tree does not rescan on
-%% every call. Two processes racing here just load twice and store the same
-%% thing, which is harmless.
-os_database() ->
+%% The TZif database to answer zone queries from, memoized in persistent_term.
+%%
+%% The operating system's own database is preferred, because it is the one the
+%% rest of the machine agrees with and it is kept current by the system's
+%% package manager. Parsing /usr/share/zoneinfo means reading several hundred
+%% files, so it must not happen once per lookup, hence the memoization. If
+%% there is no zoneinfo tree to read (a scratch container image, say), the
+%% prebuilt database from the `zones` package is used instead, which is why
+%% this lives here rather than in Gleam: `zones` is several megabytes and must
+%% never be reachable from the JavaScript build.
+%%
+%% Returns the Gleam `Result(TzDatabase, Nil)`. Two processes racing here just
+%% build the database twice and store the same thing, which is harmless.
+host_database() ->
     case persistent_term:get(?DATABASE_KEY, undefined) of
         undefined ->
-            Result = tzif@database:load_from_os(),
+            Result =
+                case tzif@database:load_from_os() of
+                    {ok, Database} -> {ok, Database};
+                    {error, _} -> {ok, zones:database()}
+                end,
             persistent_term:put(?DATABASE_KEY, Result),
             Result;
         Result ->

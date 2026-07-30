@@ -1,57 +1,7 @@
 import { Ok, Error, toList } from "./gleam.mjs";
 
-export function is_valid_timezone(timeZone) {
-  try {
-    Intl.DateTimeFormat(undefined, {timeZone: timeZone});
-    return true;
-  } catch (error) {
-    return false;
-  }
-}
-
-export function calculate_offset(year, month, day, hour, minute, second, timezone) {
-  // Create Date objects for UTC and the target timezone
-  // const utcDate = new Date(unix_timestamp * 1000);
-  const utcDate = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-
-  // Format options for getting the time components
-  const options = {
-    timeZone: timezone,
-    hour12: false,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit'
-  };
-
-  // Format the date in the target timezone
-  const formatter = new Intl.DateTimeFormat('en-US', options);
-  const parts = formatter.formatToParts(utcDate);
-
-  // For some reason the formatter was formatting times with the hour 00 as 24,
-  // so if that is the case we can manually set it to 00.
-  let hourValue = parts.find(p => p.type === 'hour').value
-  hourValue = hourValue == '24' ? '00' : hourValue
-
-  const targetDateStr = `${parts.find(p => p.type === 'year').value}-${parts.find(p => p.type === 'month').value}-${parts.find(p => p.type === 'day').value}T${hourValue}:${parts.find(p => p.type === 'minute').value}:${parts.find(p => p.type === 'second').value}`;
-  const utcDateStr = utcDate.toISOString().slice(0, 19);
-
-  // Calculate the difference in the unix timestamps
-  const targetTime = new Date(targetDateStr).getTime();
-  const utcTime = new Date(utcDateStr).getTime();
-
-  return Math.trunc((targetTime - utcTime) / 60000);
-}
-
 export function local_timezone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
-}
-
-// Reported to Gleam as `is_javascript()`; the Erlang fallback returns False.
-export function is_javascript() {
-  return true;
 }
 
 // Window over which offset transitions are materialized. It starts at the Unix
@@ -64,16 +14,42 @@ export function is_javascript() {
 // earliest known offset.
 const TZDB_WINDOW_START = "1970-01-01T00:00:00Z";
 const TZDB_WINDOW_END = "2100-01-01T00:00:00Z";
+const WINDOW_START_SECONDS = Date.parse(TZDB_WINDOW_START) / 1000;
+const WINDOW_END_SECONDS = Date.parse(TZDB_WINDOW_END) / 1000;
 
-// Raw native transition facts for one IANA zone id, used by `gtz.load` to
+// Raw native transition facts for one IANA zone id, used by `gtz.build` to
 // synthesize a lean tzif TzDatabase on the JavaScript target.
 // Returns Gleam Result(List(#(Int, Int, String)), Nil) where each tuple is
 //   #(transition_start_unix_seconds, utc_offset_seconds, designation).
+//
+// `Temporal` reports transitions directly and is used where it exists. It is
+// still absent from most shipping engines though (Node before 24, and every
+// browser until very recently), so there is an `Intl` fallback that finds the
+// same transitions by scanning. `Intl` has been universal for a decade.
 export function zone_transitions(zoneId) {
-  if (typeof Temporal === "undefined") {
-    return new Error(undefined);
+  const cached = transitionCache.get(zoneId);
+  if (cached !== undefined) {
+    return cached;
   }
 
+  const rows =
+    typeof Temporal === "undefined"
+      ? scanTransitionsWithIntl(zoneId)
+      : temporalTransitions(zoneId);
+
+  // Gleam values are immutable, so the same result can be handed out forever.
+  // Deriving a zone costs tens of milliseconds on the Intl path and a program
+  // will often rebuild the same one or two zones; the cache keeps that a
+  // once-per-zone cost rather than a per-`build` one. Failures are cached too
+  // so a typo'd zone name in a loop stays cheap.
+  const result = rows === null ? new Error(undefined) : new Ok(toList(rows));
+  transitionCache.set(zoneId, result);
+  return result;
+}
+
+const transitionCache = new Map();
+
+function temporalTransitions(zoneId) {
   const start = Temporal.Instant.from(TZDB_WINDOW_START);
   const end = Temporal.Instant.from(TZDB_WINDOW_END);
 
@@ -81,10 +57,11 @@ export function zone_transitions(zoneId) {
   try {
     zdt = start.toZonedDateTimeISO(zoneId); // throws on an unknown zone id
   } catch (_e) {
-    return new Error(undefined);
+    return null;
   }
   if (typeof zdt.getTimeZoneTransition !== "function") {
-    return new Error(undefined); // Temporal present but too old
+    // Temporal present but predates `getTimeZoneTransition`.
+    return scanTransitionsWithIntl(zoneId);
   }
 
   const rows = [];
@@ -102,7 +79,7 @@ export function zone_transitions(zoneId) {
     cursor = next;
   }
 
-  return new Ok(toList(rows));
+  return rows;
 }
 
 function transitionRow(epochNanos, zdt) {
@@ -116,13 +93,138 @@ function transitionRow(epochNanos, zdt) {
 // has one, otherwise a numeric form such as "GMT-4". This is the documented
 // approximation for `designation`.
 function zoneAbbreviation(zdt) {
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: zdt.timeZoneId,
+  return abbreviationAt(zdt.timeZoneId, zdt.epochMilliseconds);
+}
+
+// --- Intl fallback ---------------------------------------------------------
+
+// How often the window is sampled while looking for offset changes. A
+// transition can only be found if the offset differs at two adjacent samples,
+// so the step has to be shorter than the briefest period a zone ever spends on
+// one offset. Seven days clears the shortest real cases comfortably -- the
+// month-long Ramadan pauses in Morocco's DST are the tightest in the database.
+const SCAN_STEP_SECONDS = 7 * 24 * 60 * 60;
+
+// Finds a zone's offset transitions using only `Intl`, by sampling the window
+// and bisecting wherever the offset changed between two samples. Returns the
+// same rows `temporalTransitions` does, or null for an unknown zone id.
+function scanTransitionsWithIntl(zoneId) {
+  let offsetAt;
+  try {
+    offsetAt = makeOffsetReader(zoneId); // throws on an unknown zone id
+  } catch (_e) {
+    return null;
+  }
+
+  // Baseline slice: the state in effect at the start of the window. It is
+  // pushed first so it also serves as the database's pre-history default
+  // (tzif's `default_slice` uses the first entry).
+  let previousOffset = offsetAt(WINDOW_START_SECONDS);
+  const rows = [intlRow(zoneId, WINDOW_START_SECONDS, previousOffset)];
+
+  let previous = WINDOW_START_SECONDS;
+  for (
+    let current = WINDOW_START_SECONDS + SCAN_STEP_SECONDS;
+    current <= WINDOW_END_SECONDS;
+    current += SCAN_STEP_SECONDS
+  ) {
+    const offset = offsetAt(current);
+    if (offset !== previousOffset) {
+      // The change happened somewhere in (previous, current]; bisect for the
+      // first second that reports the new offset.
+      let low = previous;
+      let high = current;
+      while (high - low > 1) {
+        const middle = low + Math.floor((high - low) / 2);
+        if (offsetAt(middle) === previousOffset) {
+          low = middle;
+        } else {
+          high = middle;
+        }
+      }
+      rows.push(intlRow(zoneId, high, offset));
+      previousOffset = offset;
+    }
+    previous = current;
+  }
+
+  return rows;
+}
+
+function intlRow(zoneId, startSeconds, offsetSeconds) {
+  // A Gleam tuple is represented as a plain JS array.
+  return [
+    startSeconds,
+    offsetSeconds,
+    abbreviationAt(zoneId, startSeconds * 1000),
+  ];
+}
+
+// Builds a function from Unix seconds to the zone's UTC offset in seconds. The
+// formatter is created once per zone because constructing one is by far the
+// expensive part, and the scan above calls this thousands of times.
+function makeOffsetReader(zoneId) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
+    timeZone: zoneId,
+    hour12: false,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+
+  // `format` is around three times faster than `formatToParts`, which matters
+  // over thousands of samples, but it returns one string. Rather than assume a
+  // punctuation layout, learn the order the numeric fields come out in from a
+  // single `formatToParts` probe, then just pull the numbers out of each
+  // formatted string in that order.
+  const fieldOrder = formatter
+    .formatToParts(new Date(0))
+    .map((part) => part.type)
+    .filter((type) => type !== "literal");
+
+  return (epochSeconds) => {
+    const date = new Date(epochSeconds * 1000);
+    const numbers = formatter.format(date).match(/\d+/g);
+
+    const parts = {};
+    if (numbers !== null && numbers.length === fieldOrder.length) {
+      fieldOrder.forEach((type, index) => (parts[type] = numbers[index]));
+    } else {
+      // Unexpected shape from this engine; pay for the reliable path instead.
+      for (const part of formatter.formatToParts(date)) {
+        parts[part.type] = part.value;
+      }
+    }
+
+    // Some engines render midnight as hour 24 rather than 00.
+    const hour = parts.hour === "24" ? 0 : Number(parts.hour);
+
+    // Reading the local wall clock time back as if it were UTC gives an
+    // instant that differs from the real one by exactly the zone's offset.
+    const asUtc = Date.UTC(
+      Number(parts.year),
+      Number(parts.month) - 1,
+      Number(parts.day),
+      hour,
+      Number(parts.minute),
+      Number(parts.second),
+    );
+
+    return Math.round(asUtc / 1000) - epochSeconds;
+  };
+}
+
+function abbreviationAt(zoneId, epochMillis) {
+  const part = new Intl.DateTimeFormat("en-US", {
+    timeZone: zoneId,
     timeZoneName: "short",
     year: "numeric",
-  });
-  const part = fmt
-    .formatToParts(new Date(zdt.epochMilliseconds))
+  })
+    .formatToParts(new Date(epochMillis))
     .find((p) => p.type === "timeZoneName");
+
   return part ? part.value : "";
 }
