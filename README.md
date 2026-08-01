@@ -1,6 +1,6 @@
 # gtz
 
-Simple Gleam time zone conversions for all targets!
+Simple Gleam time zone conversions for all targets, built on top of `tzif`!
 
 [![Package Version](https://img.shields.io/hexpm/v/gtz)](https://hex.pm/packages/gtz)
 [![Hex Docs](https://img.shields.io/badge/hex-docs-ffaff3)](https://hexdocs.pm/gtz/)
