@@ -11,7 +11,8 @@
 //// import gleam/time/timestamp
 //// import gtz
 ////
-//// let assert Ok(zone) = gtz.build("Asia/Kolkata")
+//// let zone_name = gtz.local_name() // "Asia/Kolkata"
+//// let assert Ok(zone) = gtz.build(zone_name)
 ////
 //// timestamp.from_unix_seconds(1_729_257_776)
 //// |> gtz.to_calendar(zone)
@@ -50,6 +51,9 @@ pub opaque type TimeZone {
 /// ## Examples
 ///
 /// ```gleam
+/// gtz.local_name() |> gtz.build
+/// // -> Ok(TimeZone)
+///
 /// gtz.build("Asia/Kolkata")
 /// // -> Ok(TimeZone)
 ///
