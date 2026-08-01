@@ -32,8 +32,15 @@ import tzif/database.{type TzDatabase}
 import tzif/parser
 import tzif/tzcalendar
 
-/// An IANA time zone. Build with `build`, then hand to `to_calendar` or
+/// Data for an IANA time zone. Build with `build`, then hand to `to_calendar` or
 /// `from_calendar`.
+///
+/// ## Examples
+///
+/// ```gleam
+/// gtz.build("Asia/Kolkata")
+/// // -> Ok(TimeZone)
+/// ```
 pub opaque type TimeZone {
   TimeZone(name: String, database: TzDatabase)
 }
@@ -43,10 +50,9 @@ pub opaque type TimeZone {
 ///
 /// On the Erlang target, the operating system's TZif database at
 /// `/usr/share/zoneinfo` is read once and memoized into a persistent term.
-/// If the host has no zoneinfo, the prebuilt `zones` database is used
-/// to provide a fallback for bare environments. On JavaScript,
-/// information for the given zone is derived from the host's native `Temporal`
-/// and `Intl` APIs.
+/// In bare environments where the host has no zoneinfo, the prebuilt `zones`
+/// database is used as a fallback. On JavaScript, information for the given
+/// zone is derived from the host's native `Temporal` and `Intl` APIs.
 ///
 /// ## Examples
 ///
@@ -109,10 +115,11 @@ pub fn to_calendar(
 /// the offset, always prefer the `timestamp.from_calendar` in `gleam_time`
 /// over this function.
 ///
-/// When the time is ambigous in the given time zone because of daylight
-/// saving time, the timestamp that corresponds with the first occurrence of
-/// that time is returned. When the time does not exist in the given time zone
-/// because of daylight saving time, `Error(Nil)` is returned.
+/// When the time is ambiguous in the given time zone because of an offset
+/// change such as daylight saving time, the timestamp that corresponds with
+/// the first occurrence of that time is returned. When the time does not exist
+/// in the given time zone because of an offset change such as daylight saving
+/// time, `Error(Nil)` is returned.
 ///
 /// ## Examples
 ///
