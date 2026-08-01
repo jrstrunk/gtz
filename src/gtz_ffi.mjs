@@ -4,11 +4,16 @@ export function local_timezone() {
   return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
-// Window over which offset transitions are materialized. It starts at the Unix
-// epoch because that covers every realistic `gleam_time` timestamp while
-// keeping the scan cheap. Widen the start if you need pre-1970 history. Times
-// before the window resolve to the earliest known offset.
-const TZDB_WINDOW_START = "1970-01-01T00:00:00Z";
+// Window over which offset transitions are materialized. It starts well before
+// the tz database's own history does -- the earliest transition in the database
+// is Pacific/Kosrae's in 1844, and the great majority of zones leave local mean
+// time somewhere between then and 1912 -- so that a zone derived here holds the
+// same transitions the Erlang target reads out of zoneinfo. Anchoring at the
+// Unix epoch instead would be cheaper, but it would silently flatten every
+// pre-1970 instant in 92% of zones onto the 1970 offset and disagree with the
+// other target. Times before the window still resolve to the earliest known
+// offset; there is simply nothing before 1800 to get wrong.
+const TZDB_WINDOW_START = "1800-01-01T00:00:00Z";
 const TZDB_WINDOW_END = "2100-01-01T00:00:00Z";
 const WINDOW_START_SECONDS = Date.parse(TZDB_WINDOW_START) / 1000;
 const WINDOW_END_SECONDS = Date.parse(TZDB_WINDOW_END) / 1000;
@@ -90,9 +95,15 @@ function transitionRow(epochNanos, zdt) {
 // How often the window is sampled while looking for offset changes. A
 // transition can only be found if the offset differs at two adjacent samples,
 // so the step has to be shorter than the briefest period a zone ever spends on
-// one offset. Seven days clears the shortest real cases comfortably -- the
-// month-long Ramadan pauses in Morocco's DST are the tightest in the database.
-const SCAN_STEP_SECONDS = 7 * 24 * 60 * 60;
+// one offset. The tightest cases in the database are 6.96 days: Brazil called
+// off DST in Roraima a week after it began in October 2000 (America/Boa_Vista
+// and neighbours), and Asia/Gaza's projected Ramadan pauses are the same width.
+// A step of a week or more can straddle an island that narrow and miss both of
+// its transitions, and whether it does depends on where the sample grid happens
+// to fall. A day leaves nearly sevenfold margin, so nothing in the database or
+// any plausible future entry slips between two samples, and the result does not
+// depend on the grid's phase.
+const SCAN_STEP_SECONDS = 24 * 60 * 60;
 
 // Finds a zone's offset transitions using only `Intl`, by sampling the window
 // and bisecting wherever the offset changed between two samples. Returns the
