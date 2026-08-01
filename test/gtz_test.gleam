@@ -7,18 +7,31 @@ import gleam/time/duration
 import gleam/time/timestamp
 import gleeunit
 import gtz
+import tzif/database
+import zones
 
 pub fn main() {
   gleeunit.main()
 }
 
 fn new_york() -> gtz.TimeZone {
-  let assert Ok(zone) = gtz.build("America/New_York")
-  zone
+  zone("America/New_York")
 }
 
+/// The zone every conversion test below runs against.
+///
+/// `build` is what a user reaches for first, so it is what gets exercised
+/// wherever the host can answer it, which on CI is both targets. A host with no
+/// zone data of its own -- Windows, or a scratch container image -- has nothing
+/// for `build` to read on the Erlang target, so the prebuilt `zones` database
+/// stands in and the same assertions still run. That is the arrangement
+/// `build_from` exists to make possible, and it is a dev dependency here for
+/// exactly this reason.
 fn zone(name: String) -> gtz.TimeZone {
-  let assert Ok(zone) = gtz.build(name)
+  let assert Ok(zone) = case gtz.build(name) {
+    Ok(zone) -> Ok(zone)
+    Error(Nil) -> gtz.build_from(name, zones.database())
+  }
   zone
 }
 
@@ -27,10 +40,18 @@ fn at(name: String, seconds: Int) {
   timestamp.from_unix_seconds(seconds) |> gtz.to_calendar(zone(name))
 }
 
+/// A host that carries its own zone data answers for any name in it. One that
+/// does not answers for nothing, and that is not a failure: it is the case
+/// `build_from` exists for, covered by the `build_from` tests below.
 pub fn build_valid_zone_test() {
-  let assert Ok(_) = gtz.build("America/New_York")
-  let assert Ok(_) = gtz.build("Europe/London")
-  let assert Ok(_) = gtz.build("UTC")
+  case gtz.build("America/New_York") {
+    Ok(_) -> {
+      let assert Ok(_) = gtz.build("Europe/London")
+      let assert Ok(_) = gtz.build("UTC")
+      Nil
+    }
+    Error(Nil) -> Nil
+  }
 }
 
 pub fn build_invalid_zone_test() {
@@ -68,11 +89,9 @@ pub fn to_calendar_day_boundary_test() {
 }
 
 pub fn to_calendar_other_zone_test() {
-  let assert Ok(zone) = gtz.build("Europe/London")
-
   let #(date, time, offset) =
     timestamp.from_unix_seconds(1_717_392_602)
-    |> gtz.to_calendar(zone)
+    |> gtz.to_calendar(zone("Europe/London"))
 
   assert date == calendar.Date(2024, calendar.June, 3)
   assert time == calendar.TimeOfDay(6, 30, 2, 0)
@@ -128,9 +147,11 @@ pub fn local_name_test() {
   assert !string.contains(gtz.local_name(), ",")
 }
 
-/// Whatever the host calls itself has to be a zone this package can build.
+/// Whatever the host calls itself has to be a zone this package can build,
+/// from the host's own data where there is any and from a supplied database
+/// otherwise.
 pub fn local_name_is_buildable_test() {
-  let assert Ok(_) = gtz.build(gtz.local_name())
+  let _ = zone(gtz.local_name())
 }
 
 // --- Offsets that are not a whole number of hours --------------------------
@@ -252,10 +273,11 @@ pub fn to_calendar_leap_day_test() {
 /// belongs to the old offset, and a minute after it the new one is in effect;
 /// both spell 01:xx local, an hour apart in UTC.
 ///
-/// A minute rather than a second after, because the two targets do not agree
-/// on the first few seconds: the `zones` fallback ships leap second aware data
-/// whose transitions sit 27 seconds later than the same transitions computed
-/// from `Intl`. See `to_calendar_near_a_transition_test`.
+/// A minute rather than a second after, because the datasets do not agree on
+/// the first few seconds: the prebuilt `zones` database, which stands in where
+/// the host carries no zone data, is leap second aware and puts its transitions
+/// 27 seconds later than the same transitions computed from `Intl`. See
+/// `to_calendar_near_a_transition_test`.
 pub fn to_calendar_at_fall_back_instant_test() {
   let #(date, time, offset) = at("America/New_York", 1_730_613_660)
   assert date == calendar.Date(2024, calendar.November, 3)
@@ -448,12 +470,54 @@ pub fn build_rejects_malformed_names_test() {
   let assert Error(Nil) = gtz.build("America\\New_York")
 }
 
+// --- Building from a supplied database --------------------------------------
+
+/// A prebuilt database answers on every target and every host, whatever the
+/// machine does or does not carry.
+pub fn build_from_prebuilt_database_test() {
+  let assert Ok(zone) = gtz.build_from("Asia/Kolkata", zones.database())
+
+  let #(date, time, offset) =
+    timestamp.from_unix_seconds(1_729_257_776) |> gtz.to_calendar(zone)
+
+  assert date == calendar.Date(2024, calendar.October, 18)
+  assert time == calendar.TimeOfDay(18, 52, 56, 0)
+  assert offset == duration.seconds(19_800)
+}
+
+/// A supplied database is the only thing consulted, so a name it does not hold
+/// fails even where the host would have recognized it.
+pub fn build_from_rejects_unknown_name_test() {
+  let empty = database.new()
+
+  assert Error(Nil) == gtz.build_from("America/New_York", empty)
+  assert Error(Nil) == gtz.build_from("Mars/Phobos", zones.database())
+  assert Error(Nil) == gtz.build_from("", zones.database())
+}
+
+/// Where the host can answer for itself, it and a prebuilt database have to
+/// agree: same zone, same instant, same answer.
+pub fn build_from_agrees_with_build_test() {
+  let ts = timestamp.from_unix_seconds(1_729_257_776)
+
+  use name <- list.each(sample_zones)
+  case gtz.build(name) {
+    Error(Nil) -> Nil
+    Ok(from_host) -> {
+      let assert Ok(from_database) = gtz.build_from(name, zones.database())
+
+      assert gtz.to_calendar(ts, from_host)
+        == gtz.to_calendar(ts, from_database)
+    }
+  }
+}
+
 /// Zones are derived once and reused on the JavaScript target, so a second
 /// build has to answer exactly as the first did.
 pub fn build_is_repeatable_test() {
   let ts = timestamp.from_unix_seconds(1_729_257_776)
-  let assert Ok(first) = gtz.build("Europe/Paris")
-  let assert Ok(second) = gtz.build("Europe/Paris")
+  let first = zone("Europe/Paris")
+  let second = zone("Europe/Paris")
 
   assert gtz.to_calendar(ts, first) == gtz.to_calendar(ts, second)
 }
@@ -728,19 +792,17 @@ pub fn nanosecond_extremes_round_trip_test() {
 /// A spread of zones covering whole, half and quarter hour offsets, both
 /// hemispheres, fixed offsets, links, and zones that have crossed the date
 /// line or changed their rules.
-const sample_zones =
-  [
-    "UTC", "America/New_York", "America/Sao_Paulo", "America/St_Johns",
-    "Europe/London", "Europe/Dublin", "Europe/Istanbul", "Africa/Casablanca",
-    "Asia/Kolkata", "Asia/Kathmandu", "Asia/Tokyo", "Asia/Tehran",
-    "Australia/Adelaide", "Australia/Lord_Howe", "Pacific/Chatham",
-    "Pacific/Apia", "Pacific/Kiritimati", "Antarctica/Troll", "Etc/GMT+5",
-    "US/Eastern",
-  ]
+const sample_zones = [
+  "UTC", "America/New_York", "America/Sao_Paulo", "America/St_Johns",
+  "Europe/London", "Europe/Dublin", "Europe/Istanbul", "Africa/Casablanca",
+  "Asia/Kolkata", "Asia/Kathmandu", "Asia/Tokyo", "Asia/Tehran",
+  "Australia/Adelaide", "Australia/Lord_Howe", "Pacific/Chatham", "Pacific/Apia",
+  "Pacific/Kiritimati", "Antarctica/Troll", "Etc/GMT+5", "US/Eastern",
+]
 
 pub fn every_sample_zone_builds_test() {
   use name <- list.each(sample_zones)
-  let assert Ok(_) = gtz.build(name)
+  let _ = zone(name)
 }
 
 /// Noon UTC on every day of 2024, as Unix seconds.

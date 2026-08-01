@@ -1,11 +1,16 @@
 //// Simple Gleam time zone conversions for all targets, built on top of `tzif`.
+////
 //// Converting an ambiguous calendar time to a timestamp
-//// assumes the first occurrence of the ambiguous time. Accounting for [the
-//// current 27] leap seconds depends on the host's dataset. If you need more
-//// control over where the time zone data comes from, how ambiguous dates
-//// are handled, how leap seconds are accounted for, or the designation of the
-//// given time in the zone, use the very nice `tzif` and/or `zones` packages
-//// directly.
+//// assumes the first occurrence of the ambiguous time. Accounting for leap
+//// seconds depends on the dataset. If you need more control over how
+//// ambiguous dates are handled or the designation of the given time in the
+//// zone, use the `tzif` package directly.
+////
+//// The `build` function reads the host's own time zone data. When the host
+//// has none, or when it is somewhere other than where the host usually stores
+//// it, supply a database yourself with `build_from` using the very nice
+//// `tzif` or `zones` packages. If you are running this in a bare environment
+//// with no time zone data available, the `zones` package is recommended.
 ////
 //// ```gleam
 //// import gleam/time/timestamp
@@ -28,7 +33,7 @@ import gleam/result
 import gleam/time/calendar
 import gleam/time/duration
 import gleam/time/timestamp
-import tzif/database.{type TzDatabase}
+import tzif/database
 import tzif/parser
 import tzif/tzcalendar
 
@@ -42,17 +47,19 @@ import tzif/tzcalendar
 /// // -> Ok(TimeZone)
 /// ```
 pub opaque type TimeZone {
-  TimeZone(name: String, database: TzDatabase)
+  TimeZone(name: String, database: database.TzDatabase)
 }
 
 /// Build a `TimeZone` from an IANA zone name such as `"America/New_York"`.
 /// Returns an error if the name is not a zone the host recognizes.
 ///
 /// On the Erlang target, the operating system's TZif database at
-/// `/usr/share/zoneinfo` is read once and memoized into a persistent term.
-/// In bare environments where the host has no zoneinfo, the prebuilt `zones`
-/// database is used as a fallback. On JavaScript, information for the given
-/// zone is derived from the host's native `Temporal` and `Intl` APIs.
+/// `/usr/share/zoneinfo` is read once and memoized into a persistent term. A
+/// host with no zoneinfo tree there, such as a scratch container image, has no
+/// zone to recognize and every name fails; use `build_from` and provide your own
+/// database from the very nice `tzif` or `zones` packages instead. On
+/// JavaScript, information for the given zone is derived from the host's
+/// native `Temporal` and `Intl` APIs.
 ///
 /// ## Examples
 ///
@@ -68,7 +75,46 @@ pub opaque type TimeZone {
 /// ```
 pub fn build(name: String) -> Result(TimeZone, Nil) {
   use db <- result.try(database_for(name))
+  resolve(name, db)
+}
 
+/// Build a `TimeZone` from an IANA zone name and a `tzif` database of your own.
+/// Returns an error if the database holds no usable data for the name.
+///
+/// Use this when working in a bare environment (such as a scratch container
+/// image on the Erlang target), a host that keeps its zoneinfo somewhere
+/// other than `/usr/share/zoneinfo`, or you need precise control over the
+/// dataset.
+///
+/// The `zones` package ships a prebuilt database and needs no files at all,
+/// which suits bare environments. `tzif` itself can load from any directory,
+/// which suits a non-standard location or a database you compiled yourself.
+///
+/// ## Examples
+///
+/// ```gleam
+/// import zones
+///
+/// let assert Ok(zone) = gtz.build_from("Asia/Kolkata", zones.database())
+/// // -> Ok(TimeZone)
+/// ```
+///
+/// ```gleam
+/// import tzif/database
+///
+/// let assert Ok(db) = database.load_from_path("/opt/zoneinfo")
+/// let assert Ok(zone) = gtz.build_from("Asia/Kolkata", db)
+/// // -> Ok(TimeZone)
+/// ```
+pub fn build_from(
+  name: String,
+  database db: database.TzDatabase,
+) -> Result(TimeZone, Nil) {
+  resolve(name, db)
+}
+
+/// Check that a name resolves in a database, and pair the two if it does.
+fn resolve(name: String, db: database.TzDatabase) -> Result(TimeZone, Nil) {
   // Resolving the zone once here is what makes `to_calendar` infallable. `tzif`
   // fails a lookup when the name is absent, or when the zone's file carries no
   // offset records at all; neither depends on which timestamp was asked for,
@@ -175,7 +221,7 @@ pub fn from_calendar(
 pub fn local_name() -> String
 
 /// The database to answer queries about `name` from.
-fn database_for(name: String) -> Result(TzDatabase, Nil) {
+fn database_for(name: String) -> Result(database.TzDatabase, Nil) {
   case platform_zone_data(name) {
     Ok(rows) ->
       Ok(database.add_tzfile(database.new(), name, build_tzfile(rows)))
@@ -185,12 +231,12 @@ fn database_for(name: String) -> Result(TzDatabase, Nil) {
 
 /// The host's own TZif database, loaded once and memoized.
 ///
-/// The Erlang FFI prefers the operating system's zoneinfo tree and falls back
-/// to the prebuilt `zones` database. The fallback lives in the FFI rather
-/// than here so the several megabytes of `zones` are never referenced from
-/// Gleam, and so cannot be pulled into a JavaScript bundle.
+/// The Erlang FFI reads the operating system's zoneinfo tree. There is no
+/// fallback: a host without one cannot say what its zones are, and inventing
+/// an answer would be worse than `build` failing and the caller reaching for
+/// `build_from`.
 @external(erlang, "gtz_ffi", "host_database")
-fn host_database() -> Result(TzDatabase, Nil) {
+fn host_database() -> Result(database.TzDatabase, Nil) {
   Error(Nil)
 }
 
