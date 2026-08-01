@@ -5,13 +5,9 @@ export function local_timezone() {
 }
 
 // Window over which offset transitions are materialized. It starts at the Unix
-// epoch on purpose: this covers every realistic `gleam_time` timestamp, and it
-// keeps the `is_dst` heuristic honest. Including pre-modern local-mean-time
-// offsets (which are often smaller than a zone's modern standard offset) would
-// make that standard offset look "raised" and be mislabeled as DST -- e.g.
-// Asia/Kolkata's +5:30. Widen the start if you truly need pre-1970 history, at
-// the cost of that heuristic accuracy. Times before the window resolve to the
-// earliest known offset.
+// epoch because that covers every realistic `gleam_time` timestamp while
+// keeping the scan cheap. Widen the start if you need pre-1970 history. Times
+// before the window resolve to the earliest known offset.
 const TZDB_WINDOW_START = "1970-01-01T00:00:00Z";
 const TZDB_WINDOW_END = "2100-01-01T00:00:00Z";
 const WINDOW_START_SECONDS = Date.parse(TZDB_WINDOW_START) / 1000;
@@ -19,8 +15,8 @@ const WINDOW_END_SECONDS = Date.parse(TZDB_WINDOW_END) / 1000;
 
 // Raw native transition facts for one IANA zone id, used by `gtz.build` to
 // synthesize a lean tzif TzDatabase on the JavaScript target.
-// Returns Gleam Result(List(#(Int, Int, String)), Nil) where each tuple is
-//   #(transition_start_unix_seconds, utc_offset_seconds, designation).
+// Returns Gleam Result(List(#(Int, Int)), Nil) where each tuple is
+//   #(transition_start_unix_seconds, utc_offset_seconds).
 //
 // `Temporal` reports transitions directly and is used where it exists. It is
 // still absent from most shipping engines though (Node before 24, and every
@@ -86,14 +82,7 @@ function transitionRow(epochNanos, zdt) {
   const startSeconds = Number(epochNanos / 1_000_000_000n); // BigInt -> Int seconds
   const offsetSeconds = Math.round(zdt.offsetNanoseconds / 1_000_000_000);
   // A Gleam tuple is represented as a plain JS array.
-  return [startSeconds, offsetSeconds, zoneAbbreviation(zdt)];
-}
-
-// Best-effort zone abbreviation. Yields "EDT" and friends where the locale data
-// has one, otherwise a numeric form such as "GMT-4". This is the documented
-// approximation for `designation`.
-function zoneAbbreviation(zdt) {
-  return abbreviationAt(zdt.timeZoneId, zdt.epochMilliseconds);
+  return [startSeconds, offsetSeconds];
 }
 
 // --- Intl fallback ---------------------------------------------------------
@@ -120,7 +109,8 @@ function scanTransitionsWithIntl(zoneId) {
   // pushed first so it also serves as the database's pre-history default
   // (tzif's `default_slice` uses the first entry).
   let previousOffset = offsetAt(WINDOW_START_SECONDS);
-  const rows = [intlRow(zoneId, WINDOW_START_SECONDS, previousOffset)];
+  // A Gleam tuple is represented as a plain JS array.
+  const rows = [[WINDOW_START_SECONDS, previousOffset]];
 
   let previous = WINDOW_START_SECONDS;
   for (
@@ -142,22 +132,13 @@ function scanTransitionsWithIntl(zoneId) {
           high = middle;
         }
       }
-      rows.push(intlRow(zoneId, high, offset));
+      rows.push([high, offset]);
       previousOffset = offset;
     }
     previous = current;
   }
 
   return rows;
-}
-
-function intlRow(zoneId, startSeconds, offsetSeconds) {
-  // A Gleam tuple is represented as a plain JS array.
-  return [
-    startSeconds,
-    offsetSeconds,
-    abbreviationAt(zoneId, startSeconds * 1000),
-  ];
 }
 
 // Builds a function from Unix seconds to the zone's UTC offset in seconds. The
@@ -215,16 +196,4 @@ function makeOffsetReader(zoneId) {
 
     return Math.round(asUtc / 1000) - epochSeconds;
   };
-}
-
-function abbreviationAt(zoneId, epochMillis) {
-  const part = new Intl.DateTimeFormat("en-US", {
-    timeZone: zoneId,
-    timeZoneName: "short",
-    year: "numeric",
-  })
-    .formatToParts(new Date(epochMillis))
-    .find((p) => p.type === "timeZoneName");
-
-  return part ? part.value : "";
 }
